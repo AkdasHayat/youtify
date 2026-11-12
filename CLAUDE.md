@@ -15,6 +15,8 @@ Local automation: YouTube channel videos -> Spotify for Creators video-podcast e
 - Ep 73 (TpVVcz2viW8) uploaded as draft 2026-11-12; next_episode_number is 74.
 - Daily schedule installed 2026-11-12: launchd `com.youtify.daily` at 08:00, max_uploads_per_run: 1
   (Ayush wants 1/day). Output in ~/Youtify/logs/launchd.*.log and youtify.log.
+- Code is in a PRIVATE GitHub repo: https://github.com/AkdasHayat/youtify (branch main). Local git
+  identity = AkdasHayat + GitHub noreply email. Data folder ~/Youtify is never committed.
 - Data/config: `~/Youtify/` (config.yaml, state.sqlite3, review/, cache/, logs/youtify.log,
   logs/failures/*.png|html screenshots, work/downloads/, browser-profile/).
 
