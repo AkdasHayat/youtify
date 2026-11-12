@@ -1,0 +1,70 @@
+# youtify configuration. Everything runs locally on your Mac; nothing here costs money.
+# Paths may use ~. After editing, run:  youtify doctor
+
+# Where the database, generated metadata (review/), logs and the Spotify browser profile live.
+data_dir: ~/Youtify
+
+# The settings under llm/transcription are only used by channels with description_source: ai
+# (or youtube_or_ai). With the default "youtube" mode no AI is installed or run at all.
+llm:
+  # Local model served by Ollama. qwen2.5:3b (~2 GB RAM) is a good fit for an 8 GB M2 and handles
+  # many languages. For better writing, try "qwen2.5:7b" (~5 GB). Close other apps if you do.
+  model: qwen2.5:3b
+  host: http://localhost:11434
+  num_ctx: 8192
+  temperature: 0.4
+
+transcription:
+  # Only used when a YouTube video has no captions. Needs: pip install "youtify[whisper]"
+  whisper_fallback: true
+  whisper_model: mlx-community/whisper-small-mlx
+
+run:
+  max_runtime_minutes: 240        # daily job stops itself after this
+  max_uploads_per_run: 5          # Spotify uploads per day (keep it modest)
+  max_metadata_per_run: 30        # episodes to prepare ahead per day
+  catalog_refresh_hours: 24
+  require_metadata_approval: false  # true = run `youtify approve` before anything uploads
+  max_attempts: 3
+  delete_transcodes_after_upload: true
+  youtube_cookies_from_browser: null  # set to "chrome" or "safari" if YouTube rate-limits you
+  notify: true                    # macOS notification at the end of each run
+
+spotify:
+  # draft   = upload and save as draft; you review and click Publish on Spotify (recommended)
+  # publish = publish immediately (fully hands-off)
+  # handoff = fill everything in, then wait for you to review/publish in the open browser
+  finish_action: draft
+  headless: false
+  upload_timeout_minutes: 120
+  upload_thumbnail: true
+  pause_between_uploads_seconds: 20
+  wizard_url: "https://creators.spotify.com/pod/show/{show_id}/episode/wizard"
+
+# One entry per YouTube channel <-> Spotify podcast pair.
+# spotify_show_id: open the show in creators.spotify.com and copy the id from the address bar:
+#   https://creators.spotify.com/pod/show/<THIS PART>/home
+channels:
+  - name: My First Channel
+    youtube_url: https://www.youtube.com/@MyFirstChannel
+    spotify_show_id: REPLACE_ME
+    video_dirs:
+      - ~/Movies/YouTube/MyFirstChannel
+    language: en
+    # youtube       = copy the YouTube description exactly (default, no AI)
+    # youtube_or_ai = copy it, but let the local AI write one when the YouTube one is empty
+    # ai            = always write a fresh description with the local AI
+    description_source: youtube
+    append_chapters: false        # Spotify adds chapters itself; true = add your YouTube chapters
+    footer: ""                    # optional extra text at the end, e.g. "Watch on YouTube: {youtube_url}"
+    keywords_in_description: false  # true = add your YouTube tags as a "Topics:" line
+    include_shorts: false
+    min_duration_seconds: 60
+
+  - name: My Second Channel
+    youtube_url: https://www.youtube.com/@MySecondChannel
+    spotify_show_id: REPLACE_ME_TOO
+    video_dirs:
+      - ~/Movies/YouTube/MySecondChannel
+    language: hi
+    description_source: youtube

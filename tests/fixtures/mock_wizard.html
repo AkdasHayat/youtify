@@ -1,0 +1,59 @@
+<!doctype html><html><body>
+<!-- Minimal stand-in for the current Spotify for Creators episode wizard (Nov 2026), tests only.
+     Upload > Details > Review. No "Save draft" button: closing with X keeps the episode as a draft. -->
+<button aria-label="Close" class="e-101081-dialog-full-screen__close-button" id="x">X</button>
+<div id="step0"><button id="pick">Select a file</button><input type="file" id="f" accept="video/*" style="display:none"></div>
+<div id="step1" style="display:none">
+  <div id="progress" role="progressbar">Uploading 40%</div>
+  <label for="t">Title (required)</label><input id="t" name="title">
+  <div id="d" contenteditable="true" role="textbox" name="description" aria-label="Description"><p><br></p></div>
+  <section><span id="thumbnail-title">Thumbnails</span>
+    <div id="thumbnail-list" role="radiogroup">
+      <div id="upl"><span>...</span></div>
+      <div id="thumbnail-0"><button role="radio" aria-label="Thumbnail 1" aria-checked="false"><canvas></canvas></button></div>
+    </div>
+    <input type="file" id="thumb" accept="image/png,image/jpeg" style="display:none">
+  </section>
+  <label for="full-episode">Full</label><input type="radio" id="full-episode" name="podcastEpisodeType" value="full" style="position:absolute;opacity:0">
+  <label for="trailer-episode">Trailer</label><input type="radio" id="trailer-episode" name="podcastEpisodeType" value="trailer" checked style="position:absolute;opacity:0">
+  <input id="season-number" name="podcastSeasonNumber" type="number">
+  <input id="episode-number" name="podcastEpisodeNumber" type="number">
+  <section><span>Episode art</span><input type="file" id="art" accept="image/png,image/jpeg" style="display:none"></section>
+</div>
+<div id="step2" style="display:none">
+  <h1>Review and publish</h1>
+  <label><input type="radio" name="when" value="now">Now</label>
+</div>
+<div id="player"><div role="progressbar" aria-label="Seek">0:00</div></div><!-- video seek bar: always present -->
+<div id="bar"><span id="upload-status">Uploading (2%)</span>
+  <button id="next" disabled>Next</button><button id="pub" type="submit" form="review-form" style="display:none">Publish</button></div>
+<div id="done"></div>
+<script>
+const $ = id => document.getElementById(id);
+// Slate-like editor: handles paste itself (one paragraph per line); plain insertText would scramble order.
+$('d').addEventListener('paste', e => { e.preventDefault(); const t = e.clipboardData.getData('text/plain');
+  $('d').innerHTML = ''; for (const l of t.split('\n')) { const p = document.createElement('p'); p.textContent = l || '﻿'; $('d').appendChild(p); } });
+$('f').addEventListener('change', () => {
+  window.fileName = $('f').files[0].name;
+  window.draftExists = true;
+  setTimeout(() => { $('step0').style.display='none'; $('step1').style.display='block'; $('next').disabled = false; }, 300);
+  setTimeout(() => { $('upl').innerHTML = '<button id="uplbtn" aria-label="Upload thumbnail">+</button>';
+    $('uplbtn').onclick = () => $('thumb').click(); }, 1200);
+  setTimeout(() => { $('progress').remove(); $('upload-status').textContent = 'Preview ready!'; }, 3000);
+});
+$('thumb').addEventListener('change', () => {
+  const d = document.createElement('div'); d.innerHTML = '<button role="radio" aria-label="Uploaded" aria-checked="true"><img src="x"></button>';
+  $('thumbnail-list').appendChild(d); });
+$('next').onclick = () => { $('step1').style.display='none'; $('step2').style.display='block';
+  $('next').style.display='none'; $('pub').style.display='inline'; };
+function finish(kind) {
+  window.result = {title: $('t').value, description: Array.from($('d').children).map(p => p.textContent).join('\n'), kind, file: window.fileName,
+                   thumb: $('thumb').files.length, art: $('art').files.length,
+                   etype: document.querySelector("input[name=podcastEpisodeType]:checked").value,
+                   season: $('season-number').value, epno: $('episode-number').value, status: $('upload-status').textContent};
+  $('done').textContent = kind === 'draft' ? '' : 'Episode published';
+  if (kind === 'draft') history.pushState({}, '', '#episodes');
+}
+$('x').onclick = () => finish('draft');
+$('pub').onclick = () => finish('publish');
+</script></body></html>

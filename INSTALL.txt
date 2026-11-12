@@ -1,0 +1,29 @@
+youtify - quick install (macOS, Apple Silicon)
+================================================
+
+1. Unzip youtify.zip (double-click it). Move the "youtify" folder somewhere permanent,
+   e.g. your home folder. Don't run it from Downloads.
+
+2. Install Homebrew if you don't have it: https://brew.sh
+
+3. Install youtify. Either:
+     - double-click "Install.command" in the youtify folder
+       (if macOS blocks it: right-click > Open > Open), or
+     - open Terminal and run:
+         cd ~/youtify
+         bash scripts/setup_mac.sh
+
+4. Edit ~/Youtify/config.yaml: your channels, video folders and Spotify show ids.
+   (open -e ~/Youtify/config.yaml)
+
+5. In Terminal:
+     youtify doctor
+     youtify login
+     youtify sync
+     youtify scan
+     youtify prepare --limit 3
+     youtify upload --limit 1
+   Check the draft on Spotify, then turn on the daily run:
+     youtify schedule --time 10:41
+
+The full guide is in README.md.
