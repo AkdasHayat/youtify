@@ -1,7 +1,10 @@
 """Install/remove a macOS launchd job that runs `youtify run` once a day.
 
 launchd runs a missed calendar job when the Mac wakes up, so if the lid was closed at the scheduled
-time the run happens the next time you open it. `caffeinate -i` keeps the Mac awake during the run.
+time the run happens the next time you open it. But if the Mac was switched OFF at that time, launchd
+skips the run, so the job also starts at login (RunAtLoad) with `run --catch-up HH:MM`: that only runs
+when the scheduled time has passed and no run happened yet today. `caffeinate -i` keeps the Mac awake
+during the run.
 """
 from __future__ import annotations
 
@@ -21,7 +24,8 @@ def build_plist(config_path: Path, logs_dir: Path, hour: int, minute: int) -> di
     return {
         "Label": LABEL,
         "ProgramArguments": ["/usr/bin/caffeinate", "-i", sys.executable, "-m", "youtify",
-                             "--config", str(config_path), "run"],
+                             "--config", str(config_path), "run", "--catch-up", f"{hour:02d}:{minute:02d}"],
+        "RunAtLoad": True,
         "StartCalendarInterval": {"Hour": hour, "Minute": minute},
         "StandardOutPath": str(logs_dir / "launchd.out.log"),
         "StandardErrorPath": str(logs_dir / "launchd.err.log"),

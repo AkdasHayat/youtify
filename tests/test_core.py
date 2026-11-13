@@ -659,3 +659,24 @@ channels:
     assert pipeline.prepare_batch(cfg, db, 1) == 1
     assert prepared == ["vidNORMAL001"]
     assert db.episode("vidMEMBERS01")["status"] == states.SKIPPED
+
+
+def test_catch_up_due_once_per_day_after_time(tmp_path):
+    import datetime as dt
+    from youtify.cli import catch_up_due
+    from youtify.db import DB
+
+    db = DB(tmp_path / "s.sqlite3")
+    d = dt.datetime(2026, 11, 13)
+    assert not catch_up_due(db, "08:00", d.replace(hour=7, minute=59))
+    assert catch_up_due(db, "08:00", d.replace(hour=8, minute=16))
+    assert not catch_up_due(db, "08:00", d.replace(hour=9))
+    assert catch_up_due(db, "08:00", d.replace(day=14, hour=8))
+
+
+def test_schedule_plist_runs_at_login_with_catch_up(tmp_path):
+    from youtify.schedule import build_plist
+
+    pl = build_plist(tmp_path / "c.yaml", tmp_path, 8, 0)
+    assert pl["RunAtLoad"] is True
+    assert pl["ProgramArguments"][-2:] == ["--catch-up", "08:00"]

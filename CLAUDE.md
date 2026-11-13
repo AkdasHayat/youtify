@@ -5,15 +5,17 @@ something must run in his Terminal (e.g. Spotify login), and keep explanations s
 
 ## What this is
 Local automation: YouTube channel videos -> Spotify for Creators video-podcast episodes (saved as DRAFTS).
-- Code: this folder (`~/Movies/tube2pod` — folder name kept on purpose; renaming it breaks the
-  .venv), package `youtify/`, installed editable in `.venv`, command `youtify`
+- Code: this folder (`~/Movies/youtify`; renamed from ~/Movies/tube2pod by 2026-11-13, .venv was
+  rebuilt then — if the folder moves again, rebuild .venv and rerun `youtify schedule --time 08:00`), package `youtify/`, installed editable in `.venv`, command `youtify`
   (symlink in `~/.local/bin`). Renamed from tube2pod on 2026-11-12 (data moved ~/Tube2Pod -> ~/Youtify,
   sqlite paths updated). The old `tube2pod` command no longer exists.
 - Members-only videos: detected from the channel list (`availability`) or the yt-dlp error
   (youtube.MembersOnlyError) -> status skipped, kv `members_only:<id>`, no episode number used,
   and the batch moves on to the next video.
 - Ep 73 (TpVVcz2viW8) uploaded as draft 2026-11-12; next_episode_number is 74.
-- Daily schedule installed 2026-11-12: launchd `com.youtify.daily` at 08:00, max_uploads_per_run: 1
+- Daily schedule installed 2026-11-12 (reinstalled 2026-11-13): launchd `com.youtify.daily` at 08:00
+  plus RunAtLoad with `run --catch-up 08:00` (catches up at login if the Mac was OFF at 08:00; kv
+  `last_scheduled_run` = date of last scheduled run, so max once/day), max_uploads_per_run: 1
   (Ayush wants 1/day). Output in ~/Youtify/logs/launchd.*.log and youtify.log.
 - Code is in a PRIVATE GitHub repo: https://github.com/AkdasHayat/youtify (branch main). Local git
   identity = AkdasHayat + GitHub noreply email. Data folder ~/Youtify is never committed.

@@ -172,9 +172,42 @@ def cmd_upload(cfg, db, args) -> int:
     return 0
 
 
+def catch_up_due(db: DB, at: str, now=None) -> bool:
+    """For the scheduled job: True (and remember today) if the daily run at `at` (HH:MM) is due."""
+    import datetime as dt
+
+    now = now or dt.datetime.now()
+    hour, minute = (int(x) for x in at.split(":"))
+    if (now.hour, now.minute) < (hour, minute):
+        return False  # too early; the timed trigger will start it
+    today = now.date().isoformat()
+    if db.get_kv("last_scheduled_run") == today:
+        return False
+    db.set_kv("last_scheduled_run", today)
+    return True
+
+
+def _wait_for_network(timeout: float = 300) -> None:
+    import socket
+
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            socket.create_connection(("www.youtube.com", 443), timeout=5).close()
+            return
+        except OSError:
+            time.sleep(10)
+
+
 def cmd_run(cfg, db, args) -> int:
     from .pipeline import run_all, run_lock
 
+    if args.catch_up:
+        if not catch_up_due(db, args.catch_up):
+            log.info("scheduled run: not due (before %s or already ran today)", args.catch_up)
+            return 0
+        log.info("scheduled run starting")
+        _wait_for_network()
     with run_lock(cfg):
         s = run_all(cfg, db, args.minutes)
     print(json.dumps(s))
@@ -359,7 +392,7 @@ def cmd_schedule(cfg, db, args) -> int:
         return 0
     hour, minute = (int(x) for x in args.time.split(":"))
     p = schedule.install(cfg.config_path, cfg.logs_dir, hour, minute)
-    print(f"Installed {p}: runs daily at {hour:02d}:{minute:02d} (or at next wake if the Mac was asleep).")
+    print(f"Installed {p}: runs daily at {hour:02d}:{minute:02d} (or at next wake/login if the Mac was asleep or off).")
     return 0
 
 
@@ -396,6 +429,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--action", choices=["draft", "publish", "handoff"], help="override finish_action")
     s = sub.add_parser("run", help="full daily job: sync, scan, prepare, upload")
     s.add_argument("--minutes", type=float, help="override max_runtime_minutes")
+    s.add_argument("--catch-up", metavar="HH:MM", help="(used by the schedule) run only once a day, after HH:MM")
     sub.add_parser("status", help="overview per channel")
     s = sub.add_parser("list", help="list episodes")
     s.add_argument("--status")
