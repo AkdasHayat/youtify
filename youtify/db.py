@@ -143,17 +143,19 @@ class DB:
         q += " ORDER BY channel, upload_date IS NULL, upload_date, position DESC"
         return self.conn.execute(q, args).fetchall()
 
-    def needing_metadata(self, limit: int) -> list[sqlite3.Row]:
+    def needing_metadata(self, limit: int, channel: str | None = None) -> list[sqlite3.Row]:
         # Oldest YouTube videos first (catalog position 0 = newest).
         return self.conn.execute(
-            "SELECT * FROM episodes WHERE status=? ORDER BY position DESC LIMIT ?", (PENDING, limit)
+            "SELECT * FROM episodes WHERE status=? AND (? IS NULL OR channel=?) "
+            "ORDER BY position DESC LIMIT ?",
+            (PENDING, channel, channel, limit),
         ).fetchall()
 
-    def ready_for_upload(self, limit: int) -> list[sqlite3.Row]:
+    def ready_for_upload(self, limit: int, channel: str | None = None) -> list[sqlite3.Row]:
         return self.conn.execute(
-            """SELECT * FROM episodes WHERE status=?
+            """SELECT * FROM episodes WHERE status=? AND (? IS NULL OR channel=?)
                ORDER BY upload_date IS NULL, upload_date, position DESC LIMIT ?""",
-            (READY, limit),
+            (READY, channel, channel, limit),
         ).fetchall()
 
     def counts(self) -> dict[tuple[str, str], int]:

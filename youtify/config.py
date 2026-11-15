@@ -99,9 +99,14 @@ class ChannelConfig:
     # Only upload YouTube videos published AFTER this video (its YouTube id). Set automatically by
     # `youtify skip-existing` to the newest video already on Spotify.
     upload_after_video: str = ""
+    # Upload this video (YouTube id) and everything newer. Takes priority over upload_after_video.
+    upload_from_video: str = ""
     season_number: int | None = None        # e.g. 1 -> filled into "Season number"
     next_episode_number: int | None = None  # e.g. 72 -> first upload gets 72, then 73, ...
     episode_type: str = "full"              # full | trailer | bonus
+    # Daily times ("HH:MM", Mac's local time) when the schedule uploads 1 episode of this channel.
+    # Empty = 1 upload on every run.
+    upload_times: list[str] = field(default_factory=list)
     enabled: bool = True
 
     def __post_init__(self):
@@ -113,6 +118,13 @@ class ChannelConfig:
         for tab in ("/videos", "/streams", "/shorts", "/featured"):
             if self.youtube_url.endswith(tab):
                 self.youtube_url = self.youtube_url[: -len(tab)]
+        times = []
+        for t in self.upload_times:
+            h, m = (int(x) for x in str(t).split(":"))
+            if not (0 <= h < 24 and 0 <= m < 60):
+                raise ValueError(f"upload_times: bad time {t!r}")
+            times.append(f"{h:02d}:{m:02d}")
+        self.upload_times = sorted(set(times))
         if not self.subtitle_langs:
             lang = self.language
             # Manual subs first, then the original-language auto captions.

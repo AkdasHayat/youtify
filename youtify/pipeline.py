@@ -161,6 +161,9 @@ def is_download_path(cfg: Config, path: str | Path) -> bool:
 
 def upload_boundary(cfg: Config, db: DB, ch: ChannelConfig) -> int | None:
     """Catalog position of the newest video already on Spotify (videos at this position or older are skipped)."""
+    if ch.upload_from_video:
+        entry = db.catalog_entry(ch.upload_from_video)
+        return entry["position"] + 1 if entry else None
     yt_id = ch.upload_after_video or db.get_kv(f"upload_after:{ch.key}")
     if not yt_id:
         return None
@@ -321,9 +324,9 @@ def _transcript(cfg: Config, ch: ChannelConfig, ep, details: dict, cache: Path, 
 
 
 def prepare_batch(cfg: Config, db: DB, limit: int, deadline: Deadline | None = None,
-                  reserve_min: float = 0) -> int:
+                  reserve_min: float = 0, channel: str | None = None) -> int:
     # Fetch extra so a members-only video (skipped) is replaced by the next one.
-    eps = db.needing_metadata(limit + EXTRA_FOR_SKIPS)
+    eps = db.needing_metadata(limit + EXTRA_FOR_SKIPS, channel)
     if not eps:
         return 0
     from .llm import LLMError
@@ -373,7 +376,10 @@ def _thumbnail_for(cfg: Config, yt_id: str, meta: dict) -> Path | None:
 
 
 def upload_batch(cfg: Config, db: DB, limit: int, deadline: Deadline | None = None,
-                 dry_run: bool = False, finish_action: str | None = None) -> int:
+                 dry_run: bool = False, finish_action: str | None = None,
+                 per_channel: bool = False, quotas: dict[str, int] | None = None) -> int:
+    """Upload up to `limit` episodes in total, or up to `limit` per channel when per_channel,
+    or quotas[channel_key] per channel when quotas is given."""
     from .media import prepare_for_upload
     from .spotify import (NotLoggedIn, RetryableUploadError, SpotifyUploader, UncertainUploadError,
                           UploadJob)
@@ -381,23 +387,32 @@ def upload_batch(cfg: Config, db: DB, limit: int, deadline: Deadline | None = No
     from .youtube import MembersOnlyError
 
     # Fetch extra so a members-only video (skipped) is replaced by the next one.
-    eps = db.ready_for_upload(limit + EXTRA_FOR_SKIPS)
+    if quotas is not None:
+        per_channel = True
+    else:
+        quotas = {ch.key: limit for ch in cfg.enabled_channels} if per_channel else {}
+    if per_channel:
+        eps = [ep for ch in cfg.enabled_channels if quotas.get(ch.key, 0) > 0
+               for ep in db.ready_for_upload(quotas[ch.key] + EXTRA_FOR_SKIPS, ch.key)]
+    else:
+        eps = db.ready_for_upload(limit + EXTRA_FOR_SKIPS)
     if not eps:
         return 0
     action = finish_action or cfg.spotify.finish_action
     uploaded = 0
-    tried = 0
+    tried: dict[str | None, int] = {}  # attempts per channel (key None = all channels together)
     with SpotifyUploader(cfg.spotify, cfg.logs_dir, cfg.browser_profile_dir, cfg.selectors_path,
                          headless=False if action == "handoff" else None) as up:
         if not up.is_logged_in(cfg.channel(eps[0]["channel"]).spotify_show_id):
             raise NotLoggedIn("Not logged in to Spotify for Creators. Run `youtify login`.")
         for ep in eps:
-            if tried >= limit:
-                break
+            key = ep["channel"] if per_channel else None
+            if tried.get(key, 0) >= (quotas.get(key, 0) if per_channel else limit):
+                continue
             if db.get_kv(f"members_only:{ep['yt_id']}"):
                 skip_members_only(db, ep["yt_id"])
                 continue
-            if tried:
+            if sum(tried.values()):
                 time.sleep(cfg.spotify.pause_between_uploads_seconds)
             if deadline and deadline.expired(reserve_min=15):
                 log.info("Time budget reached; stopping uploads")
@@ -421,12 +436,12 @@ def upload_batch(cfg: Config, db: DB, limit: int, deadline: Deadline | None = No
                     skip_members_only(db, ep["yt_id"])
                     continue
                 except Exception as e:  # noqa: BLE001
-                    tried += 1
+                    tried[key] = tried.get(key, 0) + 1
                     delete_download(ep["yt_id"], cfg.downloads_dir)
                     n = db.record_failure(ep["yt_id"], f"download: {type(e).__name__}: {e}", cfg.run.max_attempts)
                     log.error("  download failed (attempt %d/%d): %s", n, cfg.run.max_attempts, e)
                     continue
-            tried += 1
+            tried[key] = tried.get(key, 0) + 1
             if not src.exists() and not (dry_run and is_download_path(cfg, src)):
                 db.record_failure(ep["yt_id"], f"upload: file missing {src}", cfg.run.max_attempts, give_up=True)
                 continue
@@ -479,10 +494,37 @@ def upload_batch(cfg: Config, db: DB, limit: int, deadline: Deadline | None = No
 
 
 # ---------------------------------------------------------------- daily run
-def run_all(cfg: Config, db: DB, minutes: float | None = None) -> dict:
-    """Daily job. RAM-friendly order for 8 GB: LLM work and browser work never overlap."""
+def due_upload_slots(cfg: Config, db: DB, now=None, mark: bool = True) -> dict[str, int]:
+    """For scheduled runs: uploads owed per channel = its upload_times passed today that no run
+    has handled yet (so missed times are caught up later the same day). Channels without
+    upload_times get max_uploads_per_run on every run. mark=True remembers them as handled."""
+    import datetime as dt
+
+    now = now or dt.datetime.now()
+    today = now.date().isoformat()
+    owed = {}
+    for ch in cfg.enabled_channels:
+        if not ch.upload_times:
+            owed[ch.key] = cfg.run.max_uploads_per_run
+            continue
+        passed = sum(1 for t in ch.upload_times if t <= now.strftime("%H:%M"))
+        key = f"slots_done:{ch.key}:{today}"
+        done = int(db.get_kv(key) or 0)
+        if passed > done:
+            owed[ch.key] = passed - done
+            if mark:
+                db.set_kv(key, str(passed))
+    return owed
+
+
+def run_all(cfg: Config, db: DB, minutes: float | None = None,
+            quotas: dict[str, int] | None = None) -> dict:
+    """Daily job. RAM-friendly order for 8 GB: LLM work and browser work never overlap.
+    quotas = uploads per channel key (default: max_uploads_per_run for every channel)."""
     deadline = Deadline(minutes or cfg.run.max_runtime_minutes)
     target = cfg.run.max_uploads_per_run
+    if quotas is None:
+        quotas = {ch.key: target for ch in cfg.enabled_channels}
     summary = {"metadata": 0, "uploaded": 0, "error": None}
     try:
         sync_catalogs(cfg, db)
@@ -490,14 +532,19 @@ def run_all(cfg: Config, db: DB, minutes: float | None = None) -> dict:
         log.info("Scan: %d new episode(s), %d unmatched file(s)", stats["new"], stats["unmatched"])
 
         # Phase 1: make sure today's uploads have metadata (uses at most ~40% of the budget).
-        missing = max(0, target - len(db.ready_for_upload(target)))
-        if missing:
-            budget_left = deadline.remaining_min() * 0.6
-            summary["metadata"] += prepare_batch(cfg, db, missing, deadline, reserve_min=budget_left)
+        # max_uploads_per_run applies to each channel separately.
+        for ch in cfg.enabled_channels:
+            want = quotas.get(ch.key, 0)
+            missing = max(0, want - len(db.ready_for_upload(want, ch.key))) if want else 0
+            if missing:
+                budget_left = deadline.remaining_min() * 0.6
+                summary["metadata"] += prepare_batch(cfg, db, missing, deadline,
+                                                     reserve_min=budget_left, channel=ch.key)
 
         # Phase 2: upload (browser only; the model is unloaded).
         try:
-            summary["uploaded"] = upload_batch(cfg, db, target, deadline)
+            if any(quotas.values()):
+                summary["uploaded"] = upload_batch(cfg, db, target, deadline, quotas=quotas)
         except Exception as e:  # noqa: BLE001  (e.g. logged out) - still prepare metadata below
             summary["error"] = str(e)
             log.error("Upload phase stopped: %s", e)

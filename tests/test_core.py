@@ -335,7 +335,7 @@ def test_run_all_continues_after_upload_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "upload_batch", boom)
 
     s = pipeline.run_all(cfg, db, minutes=60)
-    assert calls == ["sync", "scan", ("prep", 5), "upload", ("prep", 29)]
+    assert calls == ["sync", "scan", ("prep", 5), "upload", ("prep", 29)]  # 1 channel
     assert s == {"metadata": 2, "uploaded": 0, "error": "Not logged in"}
 
 
@@ -677,6 +677,75 @@ def test_catch_up_due_once_per_day_after_time(tmp_path):
 def test_schedule_plist_runs_at_login_with_catch_up(tmp_path):
     from youtify.schedule import build_plist
 
-    pl = build_plist(tmp_path / "c.yaml", tmp_path, 8, 0)
+    pl = build_plist(tmp_path / "c.yaml", tmp_path, ["19:05", "07:00", "08:00"])
     assert pl["RunAtLoad"] is True
-    assert pl["ProgramArguments"][-2:] == ["--catch-up", "08:00"]
+    assert pl["ProgramArguments"][-2:] == ["run", "--scheduled"]
+    assert pl["StartCalendarInterval"] == [{"Hour": 7, "Minute": 0}, {"Hour": 8, "Minute": 0},
+                                           {"Hour": 19, "Minute": 5}]
+
+
+def test_upload_limit_is_per_channel(tmp_path, monkeypatch):
+    import json as _json
+    import youtify.media as media
+    import youtify.pipeline as pipeline
+    import youtify.spotify as spotify
+
+    cfg_path = tmp_path / "c.yaml"
+    cfg_path.write_text(f"data_dir: {tmp_path}\nrun: {{notify: false}}\nchannels:\n"
+                        "  - {name: a, youtube_url: u1, spotify_show_id: s1}\n"
+                        "  - {name: b, youtube_url: u2, spotify_show_id: s2}\n")
+    cfg = load_config(cfg_path)
+    cfg.ensure_dirs()
+    db = DB(cfg.db_path)
+    meta = tmp_path / "m.json"
+    meta.write_text(_json.dumps({"title": "T", "description": "d"}))
+    for i, (yt_id, ch) in enumerate([("vidA0000001", "a"), ("vidA0000002", "a"),
+                                     ("vidB0000001", "b"), ("vidB0000002", "b")]):
+        f = tmp_path / f"{yt_id}.mp4"
+        f.write_bytes(b"x")
+        db.add_episode(yt_id, ch, "T", str(f), i)
+        db.update_episode(yt_id, status=states.READY, metadata_path=str(meta))
+    shows = []
+
+    class FakeUp:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *e): pass
+        def is_logged_in(self, show): return True
+        def upload(self, job, action):
+            shows.append(job.show_id)
+            return "https://spotify/ep"
+
+    monkeypatch.setattr(spotify, "SpotifyUploader", FakeUp)
+    monkeypatch.setattr(media, "prepare_for_upload", lambda src, wd: (src, False))
+    monkeypatch.setattr(pipeline.time, "sleep", lambda s: None)
+    assert pipeline.upload_batch(cfg, db, 1, per_channel=True) == 2
+    assert sorted(shows) == ["s1", "s2"]
+    # without per_channel the limit is shared
+    assert pipeline.upload_batch(cfg, db, 1) == 1
+
+
+def test_due_upload_slots_and_from_video(tmp_path):
+    import datetime as dt
+    import youtify.pipeline as pipeline
+
+    cfg_path = tmp_path / "c.yaml"
+    cfg_path.write_text(f"data_dir: {tmp_path}\nrun: {{notify: false}}\nchannels:\n"
+                        "  - {name: a, youtube_url: u1, spotify_show_id: s1, upload_times: ['08:00']}\n"
+                        "  - {name: b, youtube_url: u2, spotify_show_id: s2, upload_times: ['19:05', '7:00'],"
+                        " upload_from_video: vidB0000002}\n")
+    cfg = load_config(cfg_path)
+    assert cfg.channel("b").upload_times == ["07:00", "19:05"]
+    db = DB(tmp_path / "s.sqlite3")
+    d = dt.datetime(2026, 11, 15)
+    assert pipeline.due_upload_slots(cfg, db, d.replace(hour=6, minute=59)) == {}
+    assert pipeline.due_upload_slots(cfg, db, d.replace(hour=7)) == {"b": 1}
+    assert pipeline.due_upload_slots(cfg, db, d.replace(hour=7, minute=30)) == {}
+    # Mac off from 07:30 to 20:00 -> both missed slots caught up
+    assert pipeline.due_upload_slots(cfg, db, d.replace(hour=20)) == {"a": 1, "b": 1}
+    assert pipeline.due_upload_slots(cfg, db, d.replace(hour=23)) == {}
+    assert pipeline.due_upload_slots(cfg, db, d.replace(day=16, hour=21)) == {"a": 1, "b": 2}
+
+    # upload_from_video keeps that video itself (inclusive)
+    db.replace_catalog("b", [{"id": f"vidB000000{i}", "title": "t", "position": i} for i in range(4)])
+    assert pipeline.upload_boundary(cfg, db, cfg.channel("b")) == 3

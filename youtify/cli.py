@@ -202,12 +202,32 @@ def _wait_for_network(timeout: float = 300) -> None:
 def cmd_run(cfg, db, args) -> int:
     from .pipeline import run_all, run_lock
 
-    if args.catch_up:
+    from .pipeline import due_upload_slots
+
+    quotas = None
+    if args.catch_up:  # old-style schedule
         if not catch_up_due(db, args.catch_up):
             log.info("scheduled run: not due (before %s or already ran today)", args.catch_up)
             return 0
         log.info("scheduled run starting")
         _wait_for_network()
+    elif args.scheduled:
+        # launchd skips a timed start while this job is still running (long uploads), so after
+        # each run check again for times that came due meanwhile.
+        s = None
+        with run_lock(cfg):  # fails if another run is busy -> its slots stay owed for later
+            while True:
+                quotas = due_upload_slots(cfg, db)
+                if not any(quotas.values()):
+                    break
+                log.info("scheduled run starting, uploads due: %s", quotas)
+                _wait_for_network()
+                s = run_all(cfg, db, args.minutes, quotas=quotas)
+        if s is None:
+            log.info("scheduled run: nothing due")
+            return 0
+        print(json.dumps(s))
+        return 1 if s["error"] else 0
     with run_lock(cfg):
         s = run_all(cfg, db, args.minutes)
     print(json.dumps(s))
@@ -390,9 +410,17 @@ def cmd_schedule(cfg, db, args) -> int:
         schedule.uninstall()
         print("Daily schedule removed.")
         return 0
-    hour, minute = (int(x) for x in args.time.split(":"))
-    p = schedule.install(cfg.config_path, cfg.logs_dir, hour, minute)
-    print(f"Installed {p}: runs daily at {hour:02d}:{minute:02d} (or at next wake/login if the Mac was asleep or off).")
+    times = sorted({t for ch in cfg.enabled_channels for t in ch.upload_times})
+    if args.time:
+        h, m = (int(x) for x in args.time.split(":"))
+        times = sorted(set(times) | {f"{h:02d}:{m:02d}"})
+    if not times:
+        print("Set upload_times on a channel in the config, or pass --time HH:MM.")
+        return 1
+    p = schedule.install(cfg.config_path, cfg.logs_dir, times)
+    print(f"Installed {p}: runs daily at {', '.join(times)} (missed times run at next wake/login).")
+    for ch in cfg.enabled_channels:
+        print(f"  {ch.name}: {', '.join(ch.upload_times) or 'every run'}")
     return 0
 
 
@@ -429,7 +457,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--action", choices=["draft", "publish", "handoff"], help="override finish_action")
     s = sub.add_parser("run", help="full daily job: sync, scan, prepare, upload")
     s.add_argument("--minutes", type=float, help="override max_runtime_minutes")
-    s.add_argument("--catch-up", metavar="HH:MM", help="(used by the schedule) run only once a day, after HH:MM")
+    s.add_argument("--catch-up", metavar="HH:MM", help="(old schedule) run only once a day, after HH:MM")
+    s.add_argument("--scheduled", action="store_true",
+                   help="(used by the schedule) upload only channels whose upload_times are due")
     sub.add_parser("status", help="overview per channel")
     s = sub.add_parser("list", help="list episodes")
     s.add_argument("--status")
@@ -456,7 +486,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--channel")
     s.add_argument("--dry-run", action="store_true")
     s = sub.add_parser("schedule", help="install the daily macOS schedule")
-    s.add_argument("--time", default="10:41", help="HH:MM, 24h (default 10:41)")
+    s.add_argument("--time", help="extra HH:MM, 24h (default: the channels' upload_times)")
     s.add_argument("--off", action="store_true", help="remove the schedule")
     s = sub.add_parser("debug-spotify", help="open Spotify uploader with the Playwright Inspector")
     s.add_argument("--channel")

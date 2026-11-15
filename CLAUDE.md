@@ -15,7 +15,7 @@ Local automation: YouTube channel videos -> Spotify for Creators video-podcast e
 - Ep 73 (TpVVcz2viW8) uploaded as draft 2026-11-12; next_episode_number is 74.
 - Daily schedule installed 2026-11-12 (reinstalled 2026-11-13): launchd `com.youtify.daily` at 08:00
   plus RunAtLoad with `run --catch-up 08:00` (catches up at login if the Mac was OFF at 08:00; kv
-  `last_scheduled_run` = date of last scheduled run, so max once/day), max_uploads_per_run: 1
+  `last_scheduled_run` = date of last scheduled run, so max once/day), max_uploads_per_run: 1 PER CHANNEL (since 2026-11-15; `run` passes per_channel=True; manual `upload --limit` is still a total)
   (Ayush wants 1/day). Output in ~/Youtify/logs/launchd.*.log and youtify.log.
 - Code is in a PRIVATE GitHub repo: https://github.com/AkdasHayat/youtify (branch main). Local git
   identity = AkdasHayat + GitHub noreply email. Data folder ~/Youtify is never committed.
@@ -81,3 +81,13 @@ Local automation: YouTube channel videos -> Spotify for Creators video-podcast e
   recommended: replace with a fresh youtify-only profile (log in once, Spotify email code) and turn
   OFF Full Disk Access for Terminal afterwards. Ayush declined an automatic delete; ask before deleting.
 - Spotify sessions expire every few weeks -> re-login.
+
+## Update 2026-11-15: second channel + per-channel upload times
+- New channel "Drowsy Astronaut": https://www.youtube.com/@TheDrowsyAstronaut -> Spotify show
+  0ESiwMOmIjr4HnlfhMH6Ak. `upload_from_video: MhHsbEDsO14` (that video INCLUSIVE + newer; 78 videos),
+  Season 1, next_episode_number 1 (show had no public episodes), drafts. Videos are 2-3 h long.
+- Channel option `upload_times: ["HH:MM", ...]`: 1 upload per time per day. Gay Timeline ["08:00"],
+  Drowsy ["07:00", "19:05"] IST. `youtify schedule` (no --time) installs launchd at all channel times
+  with `run --scheduled`; pipeline.due_upload_slots tracks kv `slots_done:<channel>:<date>` so missed
+  times are caught up later the same day (wake/login) and the run loops while more slots came due.
+- Config backup before this change: ~/Youtify/config.yaml.bak-20261115.

@@ -18,15 +18,17 @@ LABEL = "com.youtify.daily"
 PLIST = Path("~/Library/LaunchAgents").expanduser() / f"{LABEL}.plist"
 
 
-def build_plist(config_path: Path, logs_dir: Path, hour: int, minute: int) -> dict:
+def build_plist(config_path: Path, logs_dir: Path, times: list[str]) -> dict:
+    """times = ["HH:MM", ...]: launchd starts `run --scheduled` at each; the run itself decides
+    which channels are due (see pipeline.due_upload_slots)."""
     path_env = ":".join(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin",
                          str(Path(sys.executable).parent)])
     return {
         "Label": LABEL,
         "ProgramArguments": ["/usr/bin/caffeinate", "-i", sys.executable, "-m", "youtify",
-                             "--config", str(config_path), "run", "--catch-up", f"{hour:02d}:{minute:02d}"],
+                             "--config", str(config_path), "run", "--scheduled"],
         "RunAtLoad": True,
-        "StartCalendarInterval": {"Hour": hour, "Minute": minute},
+        "StartCalendarInterval": [{"Hour": int(t[:2]), "Minute": int(t[3:])} for t in sorted(set(times))],
         "StandardOutPath": str(logs_dir / "launchd.out.log"),
         "StandardErrorPath": str(logs_dir / "launchd.err.log"),
         "EnvironmentVariables": {"PATH": path_env},
@@ -34,11 +36,11 @@ def build_plist(config_path: Path, logs_dir: Path, hour: int, minute: int) -> di
     }
 
 
-def install(config_path: Path, logs_dir: Path, hour: int, minute: int) -> Path:
+def install(config_path: Path, logs_dir: Path, times: list[str]) -> Path:
     PLIST.parent.mkdir(parents=True, exist_ok=True)
     uninstall(quiet=True)
     with PLIST.open("wb") as f:
-        plistlib.dump(build_plist(config_path, logs_dir, hour, minute), f)
+        plistlib.dump(build_plist(config_path, logs_dir, times), f)
     domain = f"gui/{os.getuid()}"
     r = subprocess.run(["launchctl", "bootstrap", domain, str(PLIST)], capture_output=True, text=True)
     if r.returncode != 0:
