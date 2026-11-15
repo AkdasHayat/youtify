@@ -97,3 +97,26 @@ Local automation: YouTube channel videos -> Spotify for Creators video-podcast e
   Optional channel `spotify_login: <name>` = separate browser profile; `youtify login --channel <key>`.
 - Today's 07:00 Drowsy slot is marked done (kv slots_done:drowsy-astronaut:2026-11-15=1) but nothing
   was uploaded; MhHsbEDsO14 is still `ready`.
+
+## ADDING A NEW CHANNEL (template, since 2026-11-15)
+Ayush sends: YouTube channel link, Spotify show link, season, first episode number, upload times
+(and optionally a start video). Do NOT build anything new; run (from this folder):
+```
+youtify add-channel --name "<Show name>" \
+  --youtube "<YouTube channel link>" --spotify "<creators.spotify.com show link>" \
+  --season 1 --episode 1 --times "7am, 7:05pm" \
+  --start-from "<YouTube video link>"      # or --start-after <link> / --start-all
+```
+- It writes the channel into ~/Youtify/config.yaml (defaults = Gay Timeline's: 1080p download,
+  delete after, exact YouTube description, Full, drafts; backup at config.yaml.bak), syncs the
+  YouTube list, prints videos-to-upload / first video / numbers / times, and reinstalls the schedule.
+- Same command with an existing --name changes only the given fields (e.g. just --spotify).
+  `--pause` stops a channel; running it again without --pause resumes it.
+- Times are Mac local time (IST), 1 draft per time per day. Missing season/episode -> defaults 1/1;
+  "none" leaves them empty. Episode numbers continue from what that show already has.
+- The show MUST be on the Spotify account youtify is logged in to (main account, browser-profile).
+  Uploads to a show of another account are refused ("wrong account?").
+- To test right away: run the upload for just that channel (see scratchpad pattern: run_all(cfg, db,
+  quotas={"<key>": 1}) under run_lock) and set kv slots_done:<key>:<today> so it counts as a slot.
+- Drowsy Astronaut is PAUSED (its show 0ESiwMOmIjr4HnlfhMH6Ak is on another Spotify account). When
+  Ayush sends the new show link: `youtify add-channel --name "Drowsy Astronaut" --spotify "<link>"`.

@@ -53,10 +53,12 @@ def notify(title: str, message: str) -> None:
 
 
 # ---------------------------------------------------------------- catalog
-def sync_catalogs(cfg: Config, db: DB, force: bool = False) -> None:
+def sync_catalogs(cfg: Config, db: DB, force: bool = False, only: str | None = None) -> None:
     from .youtube import fetch_catalog
 
     for ch in cfg.enabled_channels:
+        if only and ch.key != only:
+            continue
         age_h = (time.time() - db.catalog_refreshed_at(ch.key)) / 3600
         if not force and age_h < cfg.run.catalog_refresh_hours:
             continue
@@ -159,6 +161,21 @@ def is_download_path(cfg: Config, path: str | Path) -> bool:
     return Path(path).parent == cfg.downloads_dir
 
 
+BOUNDARY_NOTE = "older than latest Spotify episode"
+
+
+def unskip_inside_boundary(cfg: Config, db: DB, ch: ChannelConfig) -> int:
+    """After the start video moved earlier: queue again videos that the old boundary skipped."""
+    boundary = upload_boundary(cfg, db, ch)
+    n = 0
+    for e in db.episodes(states.SKIPPED, ch.key):
+        if e["last_error"] == BOUNDARY_NOTE and e["position"] is not None \
+                and (boundary is None or e["position"] < boundary):
+            db.update_episode(e["yt_id"], status=states.PENDING, last_error=None)
+            n += 1
+    return n
+
+
 def upload_boundary(cfg: Config, db: DB, ch: ChannelConfig) -> int | None:
     """Catalog position of the newest video already on Spotify (videos at this position or older are skipped)."""
     if ch.upload_from_video:
@@ -180,7 +197,7 @@ def apply_upload_boundary(cfg: Config, db: DB, ch: ChannelConfig) -> int:
     for e in db.episodes(channel=ch.key):
         if e["status"] in (states.PENDING, states.READY, states.AWAITING_APPROVAL, states.FAILED) \
                 and e["position"] is not None and e["position"] >= boundary:
-            db.update_episode(e["yt_id"], status=states.SKIPPED, last_error="older than latest Spotify episode")
+            db.update_episode(e["yt_id"], status=states.SKIPPED, last_error=BOUNDARY_NOTE)
             n += 1
     return n
 

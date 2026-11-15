@@ -427,6 +427,100 @@ def cmd_schedule(cfg, db, args) -> int:
     return 0
 
 
+def cmd_add_channel(cfg, db, args) -> int:
+    """Add a channel (or change one) from links and plain times; then sync it and show the plan."""
+    from . import channels, schedule
+    from .config import load_config, slugify
+    from .pipeline import scan, sync_catalogs, unskip_inside_boundary, upload_boundary
+
+    key = slugify(args.name)
+    exists = any(c.key == key for c in cfg.channels)
+    fields: dict = {}
+    try:
+        if args.youtube:
+            fields["youtube_url"] = channels.parse_youtube_channel(args.youtube)
+        if args.spotify:
+            fields["spotify_show_id"] = channels.parse_spotify_show(args.spotify)
+        if args.season is not None:
+            fields["season_number"] = None if args.season.lower() in ("none", "no", "0") else int(args.season)
+        if args.episode is not None:
+            fields["next_episode_number"] = None if args.episode.lower() in ("none", "no", "0") else int(args.episode)
+        if args.times:
+            fields["upload_times"] = channels.parse_times(args.times)
+        if args.start_from:
+            fields["upload_from_video"] = channels.parse_video_id(args.start_from)
+            fields["upload_after_video"] = ""
+        elif args.start_after:
+            fields["upload_after_video"] = channels.parse_video_id(args.start_after)
+            fields["upload_from_video"] = ""
+        elif args.start_all:
+            fields["upload_from_video"] = fields["upload_after_video"] = ""
+    except ValueError as e:
+        print(e)
+        return 1
+    if not exists:
+        missing = [o for o, f in (("--youtube", "youtube_url"), ("--spotify", "spotify_show_id"),
+                                  ("--times", "upload_times")) if f not in fields]
+        if missing:
+            print(f"New channel needs: {' '.join(missing)}")
+            return 1
+        fields.setdefault("season_number", 1)
+        fields.setdefault("next_episode_number", 1)
+    if not fields:
+        print("Nothing to change.")
+        return 1
+    fields["enabled"] = not args.pause
+
+    backup = cfg.config_path.with_name(cfg.config_path.name + ".bak")
+    shutil.copy2(cfg.config_path, backup)
+    added = channels.upsert_channel(cfg.config_path, args.name, fields)
+    try:
+        cfg = load_config(cfg.config_path)
+    except ValueError as e:
+        shutil.copy2(backup, cfg.config_path)
+        print(f"Config change rejected, nothing changed: {e}")
+        return 1
+    ch = cfg.channel(key)
+    print(f"{'Added' if added else 'Updated'} channel '{ch.name}' (key {ch.key}) in {cfg.config_path}")
+    if not ch.enabled:
+        print("  Paused: nothing will be uploaded for this channel until you run add-channel without --pause.")
+        return 0
+
+    cfg.ensure_dirs()
+    sync_catalogs(cfg, db, force=True, only=ch.key)
+    scan(cfg, db)
+    back = unskip_inside_boundary(cfg, db, ch)
+    if back:
+        scan(cfg, db)
+    catalog = db.catalog(ch.key)
+    if not catalog:
+        print("!! Could not read the YouTube channel's videos. Check the link, then run: youtify sync")
+        return 1
+    start = ch.upload_from_video or ch.upload_after_video
+    if start and upload_boundary(cfg, db, ch) is None:
+        print(f"!! Start video {start} is not among this channel's videos. Fix it with --start-from.")
+        return 1
+    todo = [e for e in db.episodes(channel=ch.key) if e["status"] in (states.PENDING, states.READY)]
+    todo.sort(key=lambda e: -(e["position"] or 0))
+    nxt = ch.next_episode_number
+    if nxt:  # same rule as pipeline.episode_number_for
+        nxt = max(nxt, int(db.get_kv(f"next_episode_number:{ch.key}") or nxt))
+    print(f"  YouTube:   {ch.youtube_url} ({len(catalog)} videos)")
+    print(f"  Spotify:   show {ch.spotify_show_id}")
+    print(f"  To upload: {len(todo)} video(s), oldest first")
+    if todo:
+        print(f"  First:     {todo[0]['yt_id']}  {todo[0]['title'][:70]}")
+    print(f"  Numbers:   season {ch.season_number or '-'}, next episode {nxt or '-'}")
+    print(f"  Times:     {', '.join(ch.upload_times) or 'every run'} daily, 1 draft each")
+    if schedule.PLIST.exists() or args.times:
+        times = sorted({t for c in cfg.enabled_channels for t in c.upload_times})
+        schedule.install(cfg.config_path, cfg.logs_dir, times)
+        print(f"  Schedule:  now runs at {', '.join(times)}")
+    if "spotify_show_id" in fields:
+        print("  Note: the show must be on the Spotify account youtify is logged in to.")
+    return 0
+
+
 def cmd_debug_spotify(cfg, db, args) -> int:
     from .spotify import SpotifyUploader
 
@@ -492,6 +586,18 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("schedule", help="install the daily macOS schedule")
     s.add_argument("--time", help="extra HH:MM, 24h (default: the channels' upload_times)")
     s.add_argument("--off", action="store_true", help="remove the schedule")
+    s = sub.add_parser("add-channel", help="add a channel (or change one) from links and times")
+    s.add_argument("--name", required=True, help='channel name, e.g. "Drowsy Astronaut"')
+    s.add_argument("--youtube", help="YouTube channel link")
+    s.add_argument("--spotify", help="Spotify for Creators show link (or id)")
+    s.add_argument("--season", help='season number, or "none"')
+    s.add_argument("--episode", help='first episode number, or "none"')
+    s.add_argument("--times", help='daily upload times, e.g. "7am, 7:05pm" (1 draft each)')
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--start-from", help="YouTube video link: upload this video and newer ones")
+    g.add_argument("--start-after", help="YouTube video link: upload only videos newer than this")
+    g.add_argument("--start-all", action="store_true", help="upload the whole channel")
+    s.add_argument("--pause", action="store_true", help="stop uploading this channel (run again without it to resume)")
     s = sub.add_parser("debug-spotify", help="open Spotify uploader with the Playwright Inspector")
     s.add_argument("--channel")
     return p
@@ -503,7 +609,7 @@ COMMANDS = {
     "missing": cmd_missing, "map": cmd_map, "approve": cmd_approve, "retry": cmd_retry,
     "regenerate": cmd_regenerate, "skip": cmd_skip, "mark-uploaded": cmd_mark_uploaded,
     "skip-existing": cmd_skip_existing,
-    "schedule": cmd_schedule, "debug-spotify": cmd_debug_spotify,
+    "schedule": cmd_schedule, "debug-spotify": cmd_debug_spotify, "add-channel": cmd_add_channel,
 }
 
 

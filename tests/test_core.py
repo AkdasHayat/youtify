@@ -274,7 +274,8 @@ def test_cli_parses_all_commands():
 
     p = build_parser()
     for cmd in COMMANDS:
-        extra = {"show": ["x"], "map": ["f", "x"], "regenerate": ["x"], "skip": ["x"], "mark-uploaded": ["x"]}
+        extra = {"show": ["x"], "map": ["f", "x"], "regenerate": ["x"], "skip": ["x"], "mark-uploaded": ["x"],
+                 "add-channel": ["--name", "x"]}
         assert p.parse_args([cmd, *extra.get(cmd, [])]).cmd == cmd
 
 
@@ -759,3 +760,47 @@ def test_profile_dir_per_spotify_login(tmp_path):
     cfg = load_config(cfg_path)
     assert cfg.profile_dir_for(cfg.channel("a")) == tmp_path / "browser-profile"
     assert cfg.profile_dir_for(cfg.channel("b")) == tmp_path / "browser-profile-second-acct"
+
+
+def test_add_channel_parsers():
+    from youtify import channels as c
+    assert c.parse_youtube_channel("https://www.youtube.com/@TheDrowsyAstronaut/videos") == \
+        "https://www.youtube.com/@TheDrowsyAstronaut"
+    assert c.parse_youtube_channel("@Gay_Timeline") == "https://www.youtube.com/@Gay_Timeline"
+    assert c.parse_spotify_show("https://creators.spotify.com/home/show/0ESiwMOmIjr4HnlfhMH6Ak") == \
+        "0ESiwMOmIjr4HnlfhMH6Ak"
+    assert c.parse_spotify_show("https://creators.spotify.com/pod/show/033Jd5n5gMRRxZuF8JEWOF/home") == \
+        "033Jd5n5gMRRxZuF8JEWOF"
+    assert c.parse_video_id("https://youtu.be/MhHsbEDsO14") == "MhHsbEDsO14"
+    assert c.parse_video_id("https://www.youtube.com/watch?v=MhHsbEDsO14&t=3") == "MhHsbEDsO14"
+    assert c.parse_times("7am and 7:05pm IST") == ["07:00", "19:05"]
+    assert c.parse_times("19:05, 07:00") == ["07:00", "19:05"]
+    assert c.parse_times("12am 12pm") == ["00:00", "12:00"]
+    with pytest.raises(ValueError):
+        c.parse_times("25:00")
+    with pytest.raises(ValueError):
+        c.parse_spotify_show("https://open.spotify.com/")
+
+
+def test_upsert_channel_keeps_comments(tmp_path):
+    from youtify import channels as c
+    cfg_path = tmp_path / "c.yaml"
+    cfg_path.write_text(f"# top comment\ndata_dir: {tmp_path}\nchannels:\n"
+                        "  - name: Gay Timeline\n    youtube_url: u1\n    spotify_show_id: s1   # keep\n")
+    assert c.upsert_channel(cfg_path, "Drowsy Astronaut", {
+        "youtube_url": "https://www.youtube.com/@X", "spotify_show_id": "abc0123456",
+        "season_number": 1, "next_episode_number": 1, "upload_times": ["07:00", "19:05"],
+        "upload_from_video": "MhHsbEDsO14"})
+    cfg = load_config(cfg_path)
+    d = cfg.channel("drowsy-astronaut")
+    assert d.upload_times == ["07:00", "19:05"] and d.download_missing and d.download_max_height == 1080
+    assert d.description_source == "youtube" and d.upload_from_video == "MhHsbEDsO14"
+    # update one field in place; other channel and comments untouched
+    assert not c.upsert_channel(cfg_path, "drowsy astronaut", {"spotify_show_id": "new0123456",
+                                                               "season_number": None})
+    cfg = load_config(cfg_path)
+    assert cfg.channel("drowsy-astronaut").spotify_show_id == "new0123456"
+    assert cfg.channel("drowsy-astronaut").season_number is None
+    assert cfg.channel("gay-timeline").spotify_show_id == "s1"
+    text = cfg_path.read_text()
+    assert "# top comment" in text and "# keep" in text and text.count("spotify_show_id") == 2
