@@ -377,9 +377,28 @@ def _thumbnail_for(cfg: Config, yt_id: str, meta: dict) -> Path | None:
 
 def upload_batch(cfg: Config, db: DB, limit: int, deadline: Deadline | None = None,
                  dry_run: bool = False, finish_action: str | None = None,
-                 per_channel: bool = False, quotas: dict[str, int] | None = None) -> int:
+                 per_channel: bool = False, quotas: dict[str, int] | None = None,
+                 _channels: set[str] | None = None) -> int:
     """Upload up to `limit` episodes in total, or up to `limit` per channel when per_channel,
     or quotas[channel_key] per channel when quotas is given."""
+    if _channels is None:
+        # One browser session per Spotify login (channels may be on different Spotify accounts).
+        groups: dict = {}
+        for ch in cfg.enabled_channels:
+            groups.setdefault(cfg.profile_dir_for(ch), set()).add(ch.key)
+        if len(groups) > 1:
+            total, errors = 0, []
+            for keys in groups.values():
+                try:
+                    total += upload_batch(cfg, db, limit, deadline, dry_run, finish_action,
+                                          per_channel, quotas, _channels=keys)
+                except Exception as e:  # noqa: BLE001  one account logged out -> still do the others
+                    log.error("Upload stopped for %s: %s", ", ".join(sorted(keys)), e)
+                    errors.append(e)
+            if errors and not total:
+                raise errors[0]
+            return total
+        _channels = {ch.key for ch in cfg.enabled_channels}
     from .media import prepare_for_upload
     from .spotify import (NotLoggedIn, RetryableUploadError, SpotifyUploader, UncertainUploadError,
                           UploadJob)
@@ -392,19 +411,24 @@ def upload_batch(cfg: Config, db: DB, limit: int, deadline: Deadline | None = No
     else:
         quotas = {ch.key: limit for ch in cfg.enabled_channels} if per_channel else {}
     if per_channel:
-        eps = [ep for ch in cfg.enabled_channels if quotas.get(ch.key, 0) > 0
+        eps = [ep for ch in cfg.enabled_channels if ch.key in _channels and quotas.get(ch.key, 0) > 0
                for ep in db.ready_for_upload(quotas[ch.key] + EXTRA_FOR_SKIPS, ch.key)]
     else:
-        eps = db.ready_for_upload(limit + EXTRA_FOR_SKIPS)
+        eps = [ep for ep in db.ready_for_upload(limit + EXTRA_FOR_SKIPS + 200)
+               if ep["channel"] in _channels][: limit + EXTRA_FOR_SKIPS]
     if not eps:
         return 0
     action = finish_action or cfg.spotify.finish_action
     uploaded = 0
     tried: dict[str | None, int] = {}  # attempts per channel (key None = all channels together)
-    with SpotifyUploader(cfg.spotify, cfg.logs_dir, cfg.browser_profile_dir, cfg.selectors_path,
+    profile = cfg.profile_dir_for(cfg.channel(eps[0]["channel"]))
+    profile.mkdir(parents=True, exist_ok=True)
+    with SpotifyUploader(cfg.spotify, cfg.logs_dir, profile, cfg.selectors_path,
                          headless=False if action == "handoff" else None) as up:
         if not up.is_logged_in(cfg.channel(eps[0]["channel"]).spotify_show_id):
-            raise NotLoggedIn("Not logged in to Spotify for Creators. Run `youtify login`.")
+            ch0 = cfg.channel(eps[0]["channel"])
+            hint = f"youtify login --channel {ch0.key}" if ch0.spotify_login else "youtify login"
+            raise NotLoggedIn(f"Not logged in to the Spotify account of {ch0.name}. Run `{hint}`.")
         for ep in eps:
             key = ep["channel"] if per_channel else None
             if tried.get(key, 0) >= (quotas.get(key, 0) if per_channel else limit):

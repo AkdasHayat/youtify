@@ -127,12 +127,15 @@ def cmd_login(cfg: Config, db: DB, args) -> int:
         print("Still not logged in. Make sure you are logged in to creators.spotify.com in Brave.")
         return 1
 
-    with SpotifyUploader(cfg.spotify, cfg.logs_dir, cfg.browser_profile_dir, cfg.selectors_path,
+    ch = cfg.channel(args.channel) if args.channel else cfg.enabled_channels[0]
+    profile = cfg.profile_dir_for(ch)
+    profile.mkdir(parents=True, exist_ok=True)
+    print(f"Log in with the Spotify account that owns the show of: {ch.name}")
+    with SpotifyUploader(cfg.spotify, cfg.logs_dir, profile, cfg.selectors_path,
                          headless=False) as up:
         up.interactive_login()
-        show = cfg.enabled_channels[0].spotify_show_id
-        if up.is_logged_in(show):
-            print("Logged in. The session is saved in", cfg.browser_profile_dir)
+        if up.is_logged_in(ch.spotify_show_id):
+            print("Logged in. The session is saved in", profile)
             return 0
         print("Still not logged in (or the show id is wrong). Try again.")
         return 1
@@ -356,11 +359,11 @@ def cmd_skip_existing(cfg, db, args) -> int:
     sync_catalogs(cfg, db)
     queue_downloads(cfg, db)
     total = 0
-    with SpotifyUploader(cfg.spotify, cfg.logs_dir, cfg.browser_profile_dir, cfg.selectors_path,
-                         headless=False) as up:
-        for ch in cfg.enabled_channels:
-            if args.channel and ch.key != args.channel:
-                continue
+    for ch in cfg.enabled_channels:
+        if args.channel and ch.key != args.channel:
+            continue
+        with SpotifyUploader(cfg.spotify, cfg.logs_dir, cfg.profile_dir_for(ch), cfg.selectors_path,
+                             headless=False) as up:
             titles = existing_episode_titles(up, ch.spotify_show_id)
             print(f"[{ch.key}] {len(titles)} episode(s) found on Spotify")
             catalog = [(r["yt_id"], r["title"], normalize_title(r["title"])) for r in db.catalog(ch.key)]
@@ -428,7 +431,7 @@ def cmd_debug_spotify(cfg, db, args) -> int:
     from .spotify import SpotifyUploader
 
     ch = cfg.channel(args.channel) if args.channel else cfg.enabled_channels[0]
-    with SpotifyUploader(cfg.spotify, cfg.logs_dir, cfg.browser_profile_dir, cfg.selectors_path,
+    with SpotifyUploader(cfg.spotify, cfg.logs_dir, cfg.profile_dir_for(ch), cfg.selectors_path,
                          headless=False) as up:
         up.debug(ch.spotify_show_id)
     return 0
@@ -447,6 +450,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("login", help="log in to Spotify for Creators once (saved)")
     s.add_argument("--from-brave", action="store_true", help="reuse your existing Brave login (quit Brave first)")
     s.add_argument("--profile", help='Brave profile name, e.g. "personal"')
+    s.add_argument("--channel", help="log in to the Spotify account of this channel (its spotify_login)")
     sub.add_parser("sync", help="refresh the YouTube video lists now")
     sub.add_parser("scan", help="find new video files on this Mac and match them")
     s = sub.add_parser("prepare", help="build episode metadata (YouTube description, chapters, ...)")

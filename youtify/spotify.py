@@ -207,6 +207,10 @@ class SpotifyUploader:
         url = self.page.url
         if "accounts.spotify.com" in url or "/login" in url:
             return False
+        if show_id not in url:
+            # Logged in, but to an account that does not own this show (redirected away).
+            log.warning("Spotify opened %s instead of show %s: wrong account?", url, show_id)
+            return False
         return self.find("login_form", timeout=1) is None
 
     def interactive_login(self) -> None:

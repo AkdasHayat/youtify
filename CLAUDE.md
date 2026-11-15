@@ -91,3 +91,9 @@ Local automation: YouTube channel videos -> Spotify for Creators video-podcast e
   with `run --scheduled`; pipeline.due_upload_slots tracks kv `slots_done:<channel>:<date>` so missed
   times are caught up later the same day (wake/login) and the run loops while more slots came due.
 - Config backup before this change: ~/Youtify/config.yaml.bak-20261115.
+- 2026-11-15: Drowsy show 0ESiwMOmIjr4HnlfhMH6Ak was on a DIFFERENT Spotify account; Ayush is making a
+  new show on the main account instead (replace spotify_show_id when he sends it). is_logged_in now
+  fails if Spotify redirects away from the show id (it redirected to Gay Timeline's show!).
+  Optional channel `spotify_login: <name>` = separate browser profile; `youtify login --channel <key>`.
+- Today's 07:00 Drowsy slot is marked done (kv slots_done:drowsy-astronaut:2026-11-15=1) but nothing
+  was uploaded; MhHsbEDsO14 is still `ready`.

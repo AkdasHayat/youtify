@@ -749,3 +749,13 @@ def test_due_upload_slots_and_from_video(tmp_path):
     # upload_from_video keeps that video itself (inclusive)
     db.replace_catalog("b", [{"id": f"vidB000000{i}", "title": "t", "position": i} for i in range(4)])
     assert pipeline.upload_boundary(cfg, db, cfg.channel("b")) == 3
+
+
+def test_profile_dir_per_spotify_login(tmp_path):
+    cfg_path = tmp_path / "c.yaml"
+    cfg_path.write_text(f"data_dir: {tmp_path}\nchannels:\n"
+                        "  - {name: a, youtube_url: u1, spotify_show_id: s1}\n"
+                        "  - {name: b, youtube_url: u2, spotify_show_id: s2, spotify_login: Second Acct}\n")
+    cfg = load_config(cfg_path)
+    assert cfg.profile_dir_for(cfg.channel("a")) == tmp_path / "browser-profile"
+    assert cfg.profile_dir_for(cfg.channel("b")) == tmp_path / "browser-profile-second-acct"

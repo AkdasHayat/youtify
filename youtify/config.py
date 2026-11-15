@@ -107,6 +107,9 @@ class ChannelConfig:
     # Daily times ("HH:MM", Mac's local time) when the schedule uploads 1 episode of this channel.
     # Empty = 1 upload on every run.
     upload_times: list[str] = field(default_factory=list)
+    # Name of a separate saved Spotify login (for a show on a different Spotify account).
+    # Empty = the main login. Log in once with: youtify login --channel <key>
+    spotify_login: str = ""
     enabled: bool = True
 
     def __post_init__(self):
@@ -168,6 +171,12 @@ class Config:
     @property
     def browser_profile_dir(self) -> Path:
         return self.data_dir / "browser-profile"
+
+    def profile_dir_for(self, ch: "ChannelConfig") -> Path:
+        """Browser profile holding the Spotify login for this channel's show."""
+        if ch.spotify_login:
+            return self.data_dir / f"browser-profile-{slugify(ch.spotify_login)}"
+        return self.browser_profile_dir
 
     @property
     def selectors_path(self) -> Path:
